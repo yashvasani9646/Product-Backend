@@ -7,6 +7,11 @@ app.use(express.json());
 
 let products = [];
 
+
+app.get('/homepage',(req,res)=>{
+  res.send("Hello Page")
+})
+
 app.post("/products", (req, res) => {
   const product = {
     id: Date.now(),
