@@ -12,7 +12,7 @@ let products = [];
 
 app.post("/products", (req, res) => {
   const product = {
-    id: Date.now(),
+    id: Date.now(), 
     product: req.body.product,
     price: req.body.price,
   };
