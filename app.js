@@ -13,13 +13,16 @@ app.post("/products", (req, res) => {
     return item.product === req.body.product;
   });
   if (!req.body.product || !req.body.price) {
-   return res.status(400).send("Please all fields are required");
+    return res.status(400).json({
+      error: "Please all fields are required",
+    });
   }
 
   if (existingProduct) {
-    return res.status(409).send("Product already exists");
+    return res.status(409).json({
+      error:"Product already exists"
+    })
   }
-
 
   const product = {
     id: Date.now(),
