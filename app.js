@@ -105,6 +105,7 @@ app.put("/products/:id", upload.single("image"), (req, res) => {
   const product = products.find((product) => {
     return product.id === id;
   });
+  console.log(req.body);
 
   product.product = req.body.product;
   product.price = req.body.price;
