@@ -222,13 +222,15 @@ app.post("/login", (req, res) => {
   const token = jwt.sign({ email: user.email }, "my-secret-key", {
     expiresIn: "1h",
   });
-
-  res.status(200).json({
-    message: "Login Successful",
-    token: token,
-  });
+res.status(200).json({
+  message: "Login Successful",
+  token: token,
+  user: {
+    name: user.name,
+    email: user.email,
+  },
 });
-
+});
 app.listen(port, () => {
   console.log(`Example app http://localhost:${port}`);
 });
