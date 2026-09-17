@@ -109,6 +109,7 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
     type: req.body.type /*radio button*/,
     available: available /*checkbox*/,
     image: req.file.filename /*file*/,
+    userEmail: req.user.email,
   };
 
   products.push(product);
@@ -116,17 +117,24 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
   res.send(product);
 });
 
-app.get("/products", (req, res) => {
-  res.set("Cache-Control", "no-store");
-  res.send(products);
+app.get("/products", verifyToken, (req, res) => {
+  const userProducts = products.filter((item) => {
+    return item.userEmail === req.user.email;
+  });
+
+  res.send(userProducts);
 });
 
-app.put("/products/:id", upload.single("image"), (req, res) => {
+app.put("/products/:id", verifyToken, upload.single("image"), (req, res) => {
   const id = Number(req.params.id);
-
   const product = products.find((product) => {
     return product.id === id;
   });
+  if (!product || product.userEmail !== req.user.email) {
+    return res.status(403).json({
+      error: "You cannot update this product",
+    });
+  }
   console.log(req.body);
 
   product.product = req.body.product;
@@ -143,14 +151,22 @@ app.put("/products/:id", upload.single("image"), (req, res) => {
   res.send(product);
 });
 
-app.delete("/products/:id", (req, res) => {
+app.delete("/products/:id", verifyToken, (req, res) => {
   const id = Number(req.params.id);
+
+  const product = products.find((item) => {
+    return item.id === id;
+  });
+  if (!product || product.userEmail !== req.user.email) {
+    return res.status(403).json({
+      error: "You cannot delete this product",
+    });
+  }
   products = products.filter((item) => item.id !== id);
   console.log(products);
   res.send("Product deleted successfully");
 });
 
-// ------------------------///
 
 app.post("/register", (req, res) => {
   console.log(req.body);
@@ -222,14 +238,14 @@ app.post("/login", (req, res) => {
   const token = jwt.sign({ email: user.email }, "my-secret-key", {
     expiresIn: "1h",
   });
-res.status(200).json({
-  message: "Login Successful",
-  token: token,
-  user: {
-    name: user.name,
-    email: user.email,
-  },
-});
+  res.status(200).json({
+    message: "Login Successful",
+    token: token,
+    user: {
+      name: user.name,
+      email: user.email,
+    },
+  });
 });
 app.listen(port, () => {
   console.log(`Example app http://localhost:${port}`);
