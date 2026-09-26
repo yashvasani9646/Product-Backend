@@ -16,6 +16,7 @@ const verifyToken = (req, res, next) => {
     return res.status(401).json({
       error: "Login required",
     });
+    x;
   }
 
   try {
@@ -41,6 +42,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 let products = [];
+let categories = [];
 const allowedCategories = [
   "Electronics",
   "Clothing",
@@ -167,6 +169,108 @@ app.delete("/products/:id", verifyToken, (req, res) => {
   res.send("Product deleted successfully");
 });
 
+app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
+  if (!req.body.category) {
+    return res.status(400).json({
+      error: "Category name is required",
+    });
+  }
+
+  const existingCategory = categories.find((item) => {
+    return item.category.toLowerCase() === req.body.category.trim().toLowerCase();
+  });
+
+  if (existingCategory) {
+    return res.status(409).json({
+      error: "Category already exists",
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Category image is required",
+    });
+  }
+
+  const category = {
+    id: Date.now(),
+    category: req.body.category.trim(),
+    available: req.body.available === "true",
+    image: req.file.filename,
+    userEmail: req.user.email,
+  };
+
+  categories.push(category);
+
+  res.send(category);
+});
+
+app.get("/categories", verifyToken, (req, res) => {
+  const userCategories = categories.filter((item) => {
+    return item.userEmail === req.user.email;
+  });
+
+  res.send(userCategories);
+});
+
+app.put("/categories/:id", verifyToken, upload.single("image"), (req, res) => {
+  const id = Number(req.params.id);
+  const category = categories.find((item) => {
+    return item.id === id;
+  });
+
+  if (!category || category.userEmail !== req.user.email) {
+    return res.status(403).json({
+      error: "You cannot update this category",
+    });
+  }
+
+  if (!req.body.category) {
+    return res.status(400).json({
+      error: "Category name is required",
+    });
+  }
+
+  const duplicate = categories.find((item) => {
+    return (
+      item.id !== id &&
+      item.category.toLowerCase() === req.body.category.trim().toLowerCase()
+    );
+  });
+
+  if (duplicate) {
+    return res.status(409).json({
+      error: "Category already exists",
+    });
+  }
+
+  category.category = req.body.category.trim();
+  category.available = req.body.available === "true";
+
+  if (req.file) {
+    category.image = req.file.filename;
+  }
+
+  res.send(category);
+});
+
+app.delete("/categories/:id", verifyToken, (req, res) => {
+  const id = Number(req.params.id);
+
+  const category = categories.find((item) => {
+    return item.id === id;
+  });
+
+  if (!category || category.userEmail !== req.user.email) {
+    return res.status(403).json({
+      error: "You cannot delete this category",
+    });
+  }
+
+  categories = categories.filter((item) => item.id !== id);
+  console.log(categories);
+  res.send("Category deleted successfully");
+});
 
 app.post("/register", (req, res) => {
   console.log(req.body);
