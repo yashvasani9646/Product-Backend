@@ -272,6 +272,15 @@ app.delete("/categories/:id", verifyToken, (req, res) => {
   res.send("Category deleted successfully");
 });
 
+app.get("/check-email", (req, res) => {
+  const email = req.query.email;
+
+  const exists = users.some((user) => user.email === email);
+
+  res.json({
+    exists: exists,
+  });
+});
 app.post("/register", (req, res) => {
   console.log(req.body);
 
@@ -285,6 +294,7 @@ app.post("/register", (req, res) => {
     errors.email = "Email is required";
   } else if (!req.body.email.includes("@")) {
     errors.email = "Invalid Email";
+
   } else if (users.some((user) => user.email === req.body.email)) {
     errors.email = "Email Already Exist";
   }
