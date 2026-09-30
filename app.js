@@ -16,7 +16,6 @@ const verifyToken = (req, res, next) => {
     return res.status(401).json({
       error: "Login required",
     });
-    x;
   }
 
   try {
@@ -43,16 +42,7 @@ const upload = multer({ storage: storage });
 
 let products = [];
 let categories = [];
-const allowedCategories = [
-  "Electronics",
-  "Clothing",
-  "Food",
-  "Furniture",
-  "Books",
-  "Beauty",
-  "Sports",
-  "Other",
-];
+
 
 const allowedTypes = ["New", "Used"];
 
@@ -77,7 +67,11 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
     });
   }
 
-  if (!allowedCategories.includes(req.body.category)) {
+  const existingCategory = categories.find((item) => {
+    return item.category === req.body.category;
+  }); 
+
+  if (!existingCategory) {
     return res.status(400).json({
       error: "invalid category",
     });
@@ -119,6 +113,9 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
   res.send(product);
 });
 
+app.get("/public/products", (req, res) => {
+  res.send(products);
+});
 app.get("/products", verifyToken, (req, res) => {
   const userProducts = products.filter((item) => {
     return item.userEmail === req.user.email;
@@ -177,7 +174,9 @@ app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
   }
 
   const existingCategory = categories.find((item) => {
-    return item.category.toLowerCase() === req.body.category.trim().toLowerCase();
+    return (
+      item.category.toLowerCase() === req.body.category.trim().toLowerCase()
+    );
   });
 
   if (existingCategory) {
@@ -211,6 +210,10 @@ app.get("/categories", verifyToken, (req, res) => {
   });
 
   res.send(userCategories);
+});
+
+app.get("/public/categories", (req, res) => {
+  res.send(categories);
 });
 
 app.put("/categories/:id", verifyToken, upload.single("image"), (req, res) => {
@@ -294,7 +297,6 @@ app.post("/register", (req, res) => {
     errors.email = "Email is required";
   } else if (!req.body.email.includes("@")) {
     errors.email = "Invalid Email";
-
   } else if (users.some((user) => user.email === req.body.email)) {
     errors.email = "Email Already Exist";
   }
