@@ -43,17 +43,20 @@ const upload = multer({ storage: storage });
 let products = [];
 let categories = [];
 
-
 const allowedTypes = ["New", "Used"];
+
+// ==================== CREATE PRODUCT ====================
 
 app.post("/products", verifyToken, upload.single("image"), (req, res) => {
   const existingProduct = products.find((item) => {
     return item.product === req.body.product;
   });
+
   if (
     !req.body.product ||
     !req.body.price ||
     !req.body.category ||
+    !req.body.subcategory ||
     !req.body.type
   ) {
     return res.status(400).json({
@@ -69,11 +72,21 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
 
   const existingCategory = categories.find((item) => {
     return item.category === req.body.category;
-  }); 
+  });
 
   if (!existingCategory) {
     return res.status(400).json({
       error: "invalid category",
+    });
+  }
+
+  const existingSubcategory = existingCategory.subcategories.find((item) => {
+    return item === req.body.subcategory;
+  });
+
+  if (!existingSubcategory) {
+    return res.status(400).json({
+      error: "invalid subcategory",
     });
   }
 
@@ -101,10 +114,11 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
     id: Date.now(),
     product: req.body.product,
     price: req.body.price,
-    category: req.body.category /*dropdown */,
-    type: req.body.type /*radio button*/,
-    available: available /*checkbox*/,
-    image: req.file.filename /*file*/,
+    category: req.body.category,
+    subcategory: req.body.subcategory,
+    type: req.body.type,
+    available: available,
+    image: req.file.filename,
     userEmail: req.user.email,
   };
 
@@ -113,9 +127,14 @@ app.post("/products", verifyToken, upload.single("image"), (req, res) => {
   res.send(product);
 });
 
+// ==================== GET PUBLIC PRODUCTS ====================
+
 app.get("/public/products", (req, res) => {
   res.send(products);
 });
+
+// ==================== GET ADMIN PRODUCTS ====================
+
 app.get("/products", verifyToken, (req, res) => {
   const userProducts = products.filter((item) => {
     return item.userEmail === req.user.email;
@@ -124,21 +143,71 @@ app.get("/products", verifyToken, (req, res) => {
   res.send(userProducts);
 });
 
+// ==================== UPDATE PRODUCT ====================
+
 app.put("/products/:id", verifyToken, upload.single("image"), (req, res) => {
   const id = Number(req.params.id);
+
   const product = products.find((product) => {
     return product.id === id;
   });
+
   if (!product || product.userEmail !== req.user.email) {
     return res.status(403).json({
       error: "You cannot update this product",
     });
   }
+
+  if (
+    !req.body.product ||
+    !req.body.price ||
+    !req.body.category ||
+    !req.body.subcategory ||
+    !req.body.type
+  ) {
+    return res.status(400).json({
+      error: "Please all fields are required",
+    });
+  }
+
+  const existingCategory = categories.find((item) => {
+    return item.category === req.body.category;
+  });
+
+  if (!existingCategory) {
+    return res.status(400).json({
+      error: "invalid category",
+    });
+  }
+
+  const existingSubcategory = existingCategory.subcategories.find((item) => {
+    return item === req.body.subcategory;
+  });
+
+  if (!existingSubcategory) {
+    return res.status(400).json({
+      error: "invalid subcategory",
+    });
+  }
+
+  if (!allowedTypes.includes(req.body.type)) {
+    return res.status(400).json({
+      error: "invalid type",
+    });
+  }
+
+  if (req.body.available !== "true" && req.body.available !== "false") {
+    return res.status(400).json({
+      error: "Invalid available value",
+    });
+  }
+
   console.log(req.body);
 
   product.product = req.body.product;
   product.price = req.body.price;
   product.category = req.body.category;
+  product.subcategory = req.body.subcategory;
   product.type = req.body.type;
   product.available = req.body.available === "true";
 
@@ -147,8 +216,11 @@ app.put("/products/:id", verifyToken, upload.single("image"), (req, res) => {
   }
 
   console.log(product);
+
   res.send(product);
 });
+
+// ==================== DELETE PRODUCT ====================
 
 app.delete("/products/:id", verifyToken, (req, res) => {
   const id = Number(req.params.id);
@@ -156,15 +228,21 @@ app.delete("/products/:id", verifyToken, (req, res) => {
   const product = products.find((item) => {
     return item.id === id;
   });
+
   if (!product || product.userEmail !== req.user.email) {
     return res.status(403).json({
       error: "You cannot delete this product",
     });
   }
+
   products = products.filter((item) => item.id !== id);
+
   console.log(products);
+
   res.send("Product deleted successfully");
 });
+
+// ==================== CREATE CATEGORY ====================
 
 app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
   if (!req.body.category) {
@@ -194,6 +272,7 @@ app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
   const category = {
     id: Date.now(),
     category: req.body.category.trim(),
+    subcategories: [],
     available: req.body.available === "true",
     image: req.file.filename,
     userEmail: req.user.email,
@@ -204,6 +283,8 @@ app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
   res.send(category);
 });
 
+// ==================== GET ADMIN CATEGORIES ====================
+
 app.get("/categories", verifyToken, (req, res) => {
   const userCategories = categories.filter((item) => {
     return item.userEmail === req.user.email;
@@ -212,12 +293,17 @@ app.get("/categories", verifyToken, (req, res) => {
   res.send(userCategories);
 });
 
+// ==================== GET PUBLIC CATEGORIES ====================
+
 app.get("/public/categories", (req, res) => {
   res.send(categories);
 });
 
+// ==================== UPDATE CATEGORY ====================
+
 app.put("/categories/:id", verifyToken, upload.single("image"), (req, res) => {
   const id = Number(req.params.id);
+
   const category = categories.find((item) => {
     return item.id === id;
   });
@@ -257,6 +343,8 @@ app.put("/categories/:id", verifyToken, upload.single("image"), (req, res) => {
   res.send(category);
 });
 
+// ==================== DELETE CATEGORY ====================
+
 app.delete("/categories/:id", verifyToken, (req, res) => {
   const id = Number(req.params.id);
 
@@ -271,9 +359,13 @@ app.delete("/categories/:id", verifyToken, (req, res) => {
   }
 
   categories = categories.filter((item) => item.id !== id);
+
   console.log(categories);
+
   res.send("Category deleted successfully");
 });
+
+// ==================== CHECK EMAIL ====================
 
 app.get("/check-email", (req, res) => {
   const email = req.query.email;
@@ -284,6 +376,9 @@ app.get("/check-email", (req, res) => {
     exists: exists,
   });
 });
+
+// ==================== REGISTER ====================
+
 app.post("/register", (req, res) => {
   console.log(req.body);
 
@@ -320,6 +415,7 @@ app.post("/register", (req, res) => {
   }
 
   users.push(req.body);
+
   console.log(users);
 
   res.status(200).json({
@@ -327,8 +423,49 @@ app.post("/register", (req, res) => {
   });
 });
 
+// ==================== CREATE SUBCATEGORY ====================
+
+app.post("/categories/:id/subcategories", verifyToken, (req, res) => {
+  const id = Number(req.params.id);
+
+  const category = categories.find((item) => {
+    return item.id === id;
+  });
+
+  if (!category || category.userEmail !== req.user.email) {
+    return res.status(403).json({
+      error: "You cannot update this category",
+    });
+  }
+
+  if (!req.body.subcategory || !req.body.subcategory.trim()) {
+    return res.status(400).json({
+      error: "Subcategory name is required",
+    });
+  }
+
+  const subcategory = req.body.subcategory.trim();
+
+  const existingSubcategory = category.subcategories.find((item) => {
+    return item.toLowerCase() === subcategory.toLowerCase();
+  });
+
+  if (existingSubcategory) {
+    return res.status(409).json({
+      error: "Subcategory already exists",
+    });
+  }
+
+  category.subcategories.push(subcategory);
+
+  res.send(category);
+});
+
+// ==================== LOGIN ====================
+
 app.post("/login", (req, res) => {
   const errors = {};
+
   const user = users.find((user) => user.email === req.body.email);
 
   if (!req.body.email) {
@@ -354,6 +491,7 @@ app.post("/login", (req, res) => {
   const token = jwt.sign({ email: user.email }, "my-secret-key", {
     expiresIn: "1h",
   });
+
   res.status(200).json({
     message: "Login Successful",
     token: token,
@@ -363,6 +501,9 @@ app.post("/login", (req, res) => {
     },
   });
 });
+
+// ==================== SERVER ====================
+
 app.listen(port, () => {
   console.log(`Example app http://localhost:${port}`);
 });
