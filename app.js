@@ -42,6 +42,8 @@ const upload = multer({ storage: storage });
 
 let products = [];
 let categories = [];
+let blogs = [];
+let faqs = [];
 
 const allowedTypes = ["New", "Used"];
 
@@ -501,7 +503,87 @@ app.post("/login", (req, res) => {
     },
   });
 });
+// ==================== CREATE BLOG ====================
 
+app.post("/blogs", verifyToken, upload.single("image"), (req, res) => {
+  if (!req.body.title || !req.body.description) {
+    return res.status(400).json({
+      error: "Title and description are required",
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      error: "Blog image is required",
+    });
+  }
+
+  const existingBlog = blogs.find((item) => {
+    return item.title.toLowerCase() === req.body.title.trim().toLowerCase();
+  });
+
+  if (existingBlog) {
+    return res.status(409).json({
+      error: "Blog already exists",
+    });
+  }
+
+  const blog = {
+    id: Date.now(),
+    title: req.body.title.trim(),
+    description: req.body.description.trim(),
+    image: req.file.filename,
+    userEmail: req.user.email,
+  };
+
+  blogs.push(blog);
+
+  res.status(201).json(blog);
+});
+
+app.get("/public/blogs", (req, res) => {
+  res.send(blogs);
+});
+
+
+// ==================== CREATE FAQ ====================
+
+app.post("/faqs", verifyToken, (req, res) => {
+  if (!req.body.question || !req.body.answer) {
+    return res.status(400).json({
+      error: "Question and answer are required",
+    });
+  }
+
+  const existingFaq = faqs.find((item) => {
+    return (
+      item.question.toLowerCase() === req.body.question.trim().toLowerCase()
+    );
+  });
+
+  if (existingFaq) {
+    return res.status(409).json({
+      error: "FAQ already exists",
+    });
+  }
+
+  const faq = {
+    id: Date.now(),
+    question: req.body.question.trim(),
+    answer: req.body.answer.trim(),
+    userEmail: req.user.email,
+  };
+
+  faqs.push(faq);
+
+  res.status(201).json(faq);
+});
+
+// ==================== GET PUBLIC FAQS ====================
+
+app.get("/public/faqs", (req, res) => {
+  res.send(faqs);
+});
 // ==================== SERVER ====================
 
 app.listen(port, () => {
