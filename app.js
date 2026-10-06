@@ -7,6 +7,7 @@ app.use(
   cors({
     origin: [
       "https://yash-single-product.vercel.app",
+      "https://products-gamma-pink.vercel.app",
       "http://localhost:5173",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
