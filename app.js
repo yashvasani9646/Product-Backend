@@ -8,6 +8,7 @@ app.use(
     origin: [
       "https://yash-single-product.vercel.app",
       "https://products-gamma-pink.vercel.app",
+      "https://products-rshc.vercel.app",
       "http://localhost:5173",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
