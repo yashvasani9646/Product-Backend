@@ -3,7 +3,16 @@ const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 3000;
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "https://yash-single-product.vercel.app",
+      "http://localhost:5173",
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 const multer = require("multer");
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
