@@ -29,12 +29,12 @@ app.use(
       "http://localhost:5173",
       "http://localhost:5174",
       "https://products-tjyy.vercel.app",
+      "https://upleex-app-8nk4.vercel.app",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
-
 const multer = require("multer");
 
 app.use(express.json());
