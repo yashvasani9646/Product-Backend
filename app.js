@@ -28,6 +28,7 @@ app.use(
       "https://products-rshc.vercel.app",
       "http://localhost:5173",
       "http://localhost:5174",
+      "https://products-tjyy.vercel.app",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
