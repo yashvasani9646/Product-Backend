@@ -1,8 +1,25 @@
+require("dotenv").config();
+const mongoose = require("mongoose");
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
+const cloudinary = require("cloudinary").v2;
 const app = express();
 const port = process.env.PORT || 3000;
+
+const Category = require("./model/Category");
+const Product = require("./model/Product");
+const Blog = require("./model/Blog");
+const Faq = require("./model/Faq");
+
+console.log("Cloudinary Cloud Name:", process.env.CLOUDINARY_CLOUD_NAME);
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 app.use(
   cors({
     origin: [
@@ -10,14 +27,18 @@ app.use(
       "https://products-gamma-pink.vercel.app",
       "https://products-rshc.vercel.app",
       "http://localhost:5173",
+      "http://localhost:5174",
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
+
 const multer = require("multer");
+
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
+
 const users = [];
 
 const verifyToken = (req, res, next) => {
@@ -40,16 +61,28 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({ storage: storage });
+
+const uploadToCloudinary = (file) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "upleex",
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      },
+    );
+
+    stream.end(file.buffer);
+  });
+};
 
 let products = [];
 let categories = [];
@@ -60,322 +93,429 @@ const allowedTypes = ["New", "Used"];
 
 // ==================== CREATE PRODUCT ====================
 
-app.post("/products", verifyToken, upload.single("image"), (req, res) => {
-  const existingProduct = products.find((item) => {
-    return item.product === req.body.product;
-  });
+app.post("/products", verifyToken, upload.single("image"), async (req, res) => {
+  try {
+    if (
+      !req.body.product ||
+      !req.body.price ||
+      !req.body.category ||
+      !req.body.subcategory ||
+      !req.body.type
+    ) {
+      return res.status(400).json({
+        error: "Please all fields are required",
+      });
+    }
 
-  if (
-    !req.body.product ||
-    !req.body.price ||
-    !req.body.category ||
-    !req.body.subcategory ||
-    !req.body.type
-  ) {
-    return res.status(400).json({
-      error: "Please all fields are required",
+    const existingProduct = await Product.findOne({
+      product: req.body.product,
+    });
+
+    if (existingProduct) {
+      return res.status(409).json({
+        error: "Product already exists",
+      });
+    }
+
+    const existingCategory = await Category.findOne({
+      category: req.body.category,
+    });
+
+    if (!existingCategory) {
+      return res.status(400).json({
+        error: "invalid category",
+      });
+    }
+
+    const existingSubcategory = existingCategory.subcategories.find(
+      (item) => item === req.body.subcategory,
+    );
+
+    if (!existingSubcategory) {
+      return res.status(400).json({
+        error: "invalid subcategory",
+      });
+    }
+
+    if (!allowedTypes.includes(req.body.type)) {
+      return res.status(400).json({
+        error: "invalid type",
+      });
+    }
+
+    if (req.body.available !== "true" && req.body.available !== "false") {
+      return res.status(400).json({
+        error: "Invalid available value",
+      });
+    }
+
+    const available = req.body.available === "true";
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: "Image is required",
+      });
+    }
+
+    const cloudinaryResult = await uploadToCloudinary(req.file);
+
+    const product = new Product({
+      id: Date.now(),
+      product: req.body.product,
+      price: req.body.price,
+      category: req.body.category,
+      subcategory: req.body.subcategory,
+      type: req.body.type,
+      available: available,
+      image: cloudinaryResult.secure_url,
+      userEmail: req.user.email,
+    });
+
+    await product.save();
+
+    res.status(201).json(product);
+  } catch (error) {
+    console.log("Product Save Error:", error);
+
+    res.status(500).json({
+      error: "Failed to save product",
     });
   }
-
-  if (existingProduct) {
-    return res.status(409).json({
-      error: "Product already exists",
-    });
-  }
-
-  const existingCategory = categories.find((item) => {
-    return item.category === req.body.category;
-  });
-
-  if (!existingCategory) {
-    return res.status(400).json({
-      error: "invalid category",
-    });
-  }
-
-  const existingSubcategory = existingCategory.subcategories.find((item) => {
-    return item === req.body.subcategory;
-  });
-
-  if (!existingSubcategory) {
-    return res.status(400).json({
-      error: "invalid subcategory",
-    });
-  }
-
-  if (!allowedTypes.includes(req.body.type)) {
-    return res.status(400).json({
-      error: "invalid type",
-    });
-  }
-
-  if (req.body.available !== "true" && req.body.available !== "false") {
-    return res.status(400).json({
-      error: "Invalid available value",
-    });
-  }
-
-  const available = req.body.available === "true";
-
-  if (!req.file) {
-    return res.status(400).json({
-      error: "Image is required",
-    });
-  }
-
-  const product = {
-    id: Date.now(),
-    product: req.body.product,
-    price: req.body.price,
-    category: req.body.category,
-    subcategory: req.body.subcategory,
-    type: req.body.type,
-    available: available,
-    image: req.file.filename,
-    userEmail: req.user.email,
-  };
-
-  products.push(product);
-
-  res.send(product);
 });
 
 // ==================== GET PUBLIC PRODUCTS ====================
 
-app.get("/public/products", (req, res) => {
-  res.send(products);
+app.get("/public/products", async (req, res) => {
+  try {
+    const products = await Product.find();
+
+    res.send(products);
+  } catch (error) {
+    console.log("Get Public Products Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get public products",
+    });
+  }
 });
 
 // ==================== GET ADMIN PRODUCTS ====================
 
-app.get("/products", verifyToken, (req, res) => {
-  const userProducts = products.filter((item) => {
-    return item.userEmail === req.user.email;
-  });
+app.get("/products", verifyToken, async (req, res) => {
+  try {
+    const userProducts = await Product.find({
+      userEmail: req.user.email,
+    });
 
-  res.send(userProducts);
+    res.send(userProducts);
+  } catch (error) {
+    console.log("Get Products Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get products",
+    });
+  }
 });
 
 // ==================== UPDATE PRODUCT ====================
 
-app.put("/products/:id", verifyToken, upload.single("image"), (req, res) => {
-  const id = Number(req.params.id);
+app.put(
+  "/products/:id",
+  verifyToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
 
-  const product = products.find((product) => {
-    return product.id === id;
-  });
+      const product = await Product.findOne({
+        id: id,
+        userEmail: req.user.email,
+      });
 
-  if (!product || product.userEmail !== req.user.email) {
-    return res.status(403).json({
-      error: "You cannot update this product",
-    });
-  }
+      if (!product) {
+        return res.status(403).json({
+          error: "You cannot update this product",
+        });
+      }
 
-  if (
-    !req.body.product ||
-    !req.body.price ||
-    !req.body.category ||
-    !req.body.subcategory ||
-    !req.body.type
-  ) {
-    return res.status(400).json({
-      error: "Please all fields are required",
-    });
-  }
+      if (
+        !req.body.product ||
+        !req.body.price ||
+        !req.body.category ||
+        !req.body.subcategory ||
+        !req.body.type
+      ) {
+        return res.status(400).json({
+          error: "Please all fields are required",
+        });
+      }
 
-  const existingCategory = categories.find((item) => {
-    return item.category === req.body.category;
-  });
+      const existingCategory = await Category.findOne({
+        category: req.body.category,
+      });
 
-  if (!existingCategory) {
-    return res.status(400).json({
-      error: "invalid category",
-    });
-  }
+      if (!existingCategory) {
+        return res.status(400).json({
+          error: "invalid category",
+        });
+      }
 
-  const existingSubcategory = existingCategory.subcategories.find((item) => {
-    return item === req.body.subcategory;
-  });
+      const existingSubcategory = existingCategory.subcategories.find(
+        (item) => item === req.body.subcategory,
+      );
 
-  if (!existingSubcategory) {
-    return res.status(400).json({
-      error: "invalid subcategory",
-    });
-  }
+      if (!existingSubcategory) {
+        return res.status(400).json({
+          error: "invalid subcategory",
+        });
+      }
 
-  if (!allowedTypes.includes(req.body.type)) {
-    return res.status(400).json({
-      error: "invalid type",
-    });
-  }
+      if (!allowedTypes.includes(req.body.type)) {
+        return res.status(400).json({
+          error: "invalid type",
+        });
+      }
 
-  if (req.body.available !== "true" && req.body.available !== "false") {
-    return res.status(400).json({
-      error: "Invalid available value",
-    });
-  }
+      if (req.body.available !== "true" && req.body.available !== "false") {
+        return res.status(400).json({
+          error: "Invalid available value",
+        });
+      }
 
-  console.log(req.body);
+      product.product = req.body.product;
+      product.price = req.body.price;
+      product.category = req.body.category;
+      product.subcategory = req.body.subcategory;
+      product.type = req.body.type;
+      product.available = req.body.available === "true";
 
-  product.product = req.body.product;
-  product.price = req.body.price;
-  product.category = req.body.category;
-  product.subcategory = req.body.subcategory;
-  product.type = req.body.type;
-  product.available = req.body.available === "true";
+      if (req.file) {
+        const cloudinaryResult = await uploadToCloudinary(req.file);
+        product.image = cloudinaryResult.secure_url;
+      }
 
-  if (req.file) {
-    product.image = req.file.filename;
-  }
+      await product.save();
 
-  console.log(product);
+      res.send(product);
+    } catch (error) {
+      console.log("Update Product Error:", error);
 
-  res.send(product);
-});
+      res.status(500).json({
+        error: "Failed to update product",
+      });
+    }
+  },
+);
 
 // ==================== DELETE PRODUCT ====================
 
-app.delete("/products/:id", verifyToken, (req, res) => {
-  const id = Number(req.params.id);
+app.delete("/products/:id", verifyToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
 
-  const product = products.find((item) => {
-    return item.id === id;
-  });
+    const product = await Product.findOne({
+      id: id,
+      userEmail: req.user.email,
+    });
 
-  if (!product || product.userEmail !== req.user.email) {
-    return res.status(403).json({
-      error: "You cannot delete this product",
+    if (!product) {
+      return res.status(403).json({
+        error: "You cannot delete this product",
+      });
+    }
+
+    await Product.deleteOne({
+      id: id,
+      userEmail: req.user.email,
+    });
+
+    res.send("Product deleted successfully");
+  } catch (error) {
+    console.log("Delete Product Error:", error);
+
+    res.status(500).json({
+      error: "Failed to delete product",
     });
   }
-
-  products = products.filter((item) => item.id !== id);
-
-  console.log(products);
-
-  res.send("Product deleted successfully");
 });
 
 // ==================== CREATE CATEGORY ====================
 
-app.post("/categories", verifyToken, upload.single("image"), (req, res) => {
-  if (!req.body.category) {
-    return res.status(400).json({
-      error: "Category name is required",
-    });
-  }
+app.post(
+  "/categories",
+  verifyToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      if (!req.body.category) {
+        return res.status(400).json({
+          error: "Category name is required",
+        });
+      }
 
-  const existingCategory = categories.find((item) => {
-    return (
-      item.category.toLowerCase() === req.body.category.trim().toLowerCase()
-    );
-  });
+      const existingCategory = await Category.findOne({
+        category: req.body.category.trim(),
+      });
 
-  if (existingCategory) {
-    return res.status(409).json({
-      error: "Category already exists",
-    });
-  }
+      if (existingCategory) {
+        return res.status(409).json({
+          error: "Category already exists",
+        });
+      }
 
-  if (!req.file) {
-    return res.status(400).json({
-      error: "Category image is required",
-    });
-  }
+      if (!req.file) {
+        return res.status(400).json({
+          error: "Category image is required",
+        });
+      }
 
-  const category = {
-    id: Date.now(),
-    category: req.body.category.trim(),
-    subcategories: [],
-    available: req.body.available === "true",
-    image: req.file.filename,
-    userEmail: req.user.email,
-  };
+      const cloudinaryResult = await uploadToCloudinary(req.file);
 
-  categories.push(category);
+      const category = new Category({
+        id: Date.now(),
+        category: req.body.category.trim(),
+        subcategories: [],
+        available: req.body.available === "true",
+        image: cloudinaryResult.secure_url,
+        userEmail: req.user.email,
+      });
 
-  res.send(category);
-});
+      await category.save();
+
+      res.status(201).json(category);
+    } catch (error) {
+      console.log("Category Save Error:", error);
+
+      res.status(500).json({
+        error: error.message,
+      });
+    }
+  },
+);
 
 // ==================== GET ADMIN CATEGORIES ====================
 
-app.get("/categories", verifyToken, (req, res) => {
-  const userCategories = categories.filter((item) => {
-    return item.userEmail === req.user.email;
-  });
+app.get("/categories", verifyToken, async (req, res) => {
+  try {
+    const userCategories = await Category.find({
+      userEmail: req.user.email,
+    });
 
-  res.send(userCategories);
+    res.send(userCategories);
+  } catch (error) {
+    console.log("Get Categories Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get categories",
+    });
+  }
 });
 
 // ==================== GET PUBLIC CATEGORIES ====================
 
-app.get("/public/categories", (req, res) => {
-  res.send(categories);
+app.get("/public/categories", async (req, res) => {
+  try {
+    const categories = await Category.find();
+
+    res.send(categories);
+  } catch (error) {
+    console.log("Get Public Categories Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get public categories",
+    });
+  }
 });
 
 // ==================== UPDATE CATEGORY ====================
 
-app.put("/categories/:id", verifyToken, upload.single("image"), (req, res) => {
-  const id = Number(req.params.id);
+app.put(
+  "/categories/:id",
+  verifyToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
 
-  const category = categories.find((item) => {
-    return item.id === id;
-  });
+      const category = await Category.findOne({
+        id: id,
+        userEmail: req.user.email,
+      });
 
-  if (!category || category.userEmail !== req.user.email) {
-    return res.status(403).json({
-      error: "You cannot update this category",
-    });
-  }
+      if (!category) {
+        return res.status(403).json({
+          error: "You cannot update this category",
+        });
+      }
 
-  if (!req.body.category) {
-    return res.status(400).json({
-      error: "Category name is required",
-    });
-  }
+      if (!req.body.category) {
+        return res.status(400).json({
+          error: "Category name is required",
+        });
+      }
 
-  const duplicate = categories.find((item) => {
-    return (
-      item.id !== id &&
-      item.category.toLowerCase() === req.body.category.trim().toLowerCase()
-    );
-  });
+      const duplicate = await Category.findOne({
+        id: { $ne: id },
+        category: req.body.category.trim(),
+      });
 
-  if (duplicate) {
-    return res.status(409).json({
-      error: "Category already exists",
-    });
-  }
+      if (duplicate) {
+        return res.status(409).json({
+          error: "Category already exists",
+        });
+      }
 
-  category.category = req.body.category.trim();
-  category.available = req.body.available === "true";
+      category.category = req.body.category.trim();
+      category.available = req.body.available === "true";
 
-  if (req.file) {
-    category.image = req.file.filename;
-  }
+      if (req.file) {
+        const cloudinaryResult = await uploadToCloudinary(req.file);
+        category.image = cloudinaryResult.secure_url;
+      }
 
-  res.send(category);
-});
+      await category.save();
+
+      res.send(category);
+    } catch (error) {
+      console.log("Update Category Error:", error);
+
+      res.status(500).json({
+        error: "Failed to update category",
+      });
+    }
+  },
+);
 
 // ==================== DELETE CATEGORY ====================
 
-app.delete("/categories/:id", verifyToken, (req, res) => {
-  const id = Number(req.params.id);
+app.delete("/categories/:id", verifyToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
 
-  const category = categories.find((item) => {
-    return item.id === id;
-  });
+    const category = await Category.findOne({
+      id: id,
+      userEmail: req.user.email,
+    });
 
-  if (!category || category.userEmail !== req.user.email) {
-    return res.status(403).json({
-      error: "You cannot delete this category",
+    if (!category) {
+      return res.status(403).json({
+        error: "You cannot delete this category",
+      });
+    }
+
+    await Category.deleteOne({
+      id: id,
+      userEmail: req.user.email,
+    });
+
+    res.send("Category deleted successfully");
+  } catch (error) {
+    console.log("Delete Category Error:", error);
+
+    res.status(500).json({
+      error: "Failed to delete category",
     });
   }
-
-  categories = categories.filter((item) => item.id !== id);
-
-  console.log(categories);
-
-  res.send("Category deleted successfully");
 });
 
 // ==================== CHECK EMAIL ====================
@@ -438,40 +578,51 @@ app.post("/register", (req, res) => {
 
 // ==================== CREATE SUBCATEGORY ====================
 
-app.post("/categories/:id/subcategories", verifyToken, (req, res) => {
-  const id = Number(req.params.id);
+app.post("/categories/:id/subcategories", verifyToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
 
-  const category = categories.find((item) => {
-    return item.id === id;
-  });
+    const category = await Category.findOne({
+      id: id,
+      userEmail: req.user.email,
+    });
 
-  if (!category || category.userEmail !== req.user.email) {
-    return res.status(403).json({
-      error: "You cannot update this category",
+    if (!category) {
+      return res.status(403).json({
+        error: "You cannot update this category",
+      });
+    }
+
+    if (!req.body.subcategory || !req.body.subcategory.trim()) {
+      return res.status(400).json({
+        error: "Subcategory name is required",
+      });
+    }
+
+    const subcategory = req.body.subcategory.trim();
+
+    const existingSubcategory = category.subcategories.find((item) => {
+      return item.toLowerCase() === subcategory.toLowerCase();
+    });
+
+    if (existingSubcategory) {
+      return res.status(409).json({
+        error: "Subcategory already exists",
+      });
+    }
+
+    category.subcategories.push(subcategory);
+
+    await category.save();
+
+    res.send(category);
+  } catch (error) {
+    console.log("Subcategory Save Error:", error);
+
+    res.status(500).json({
+      error: "Failed to save subcategory",
     });
   }
-
-  if (!req.body.subcategory || !req.body.subcategory.trim()) {
-    return res.status(400).json({
-      error: "Subcategory name is required",
-    });
-  }
-
-  const subcategory = req.body.subcategory.trim();
-
-  const existingSubcategory = category.subcategories.find((item) => {
-    return item.toLowerCase() === subcategory.toLowerCase();
-  });
-
-  if (existingSubcategory) {
-    return res.status(409).json({
-      error: "Subcategory already exists",
-    });
-  }
-
-  category.subcategories.push(subcategory);
-
-  res.send(category);
 });
 
 // ==================== LOGIN ====================
@@ -514,89 +665,137 @@ app.post("/login", (req, res) => {
     },
   });
 });
+
 // ==================== CREATE BLOG ====================
 
-app.post("/blogs", verifyToken, upload.single("image"), (req, res) => {
-  if (!req.body.title || !req.body.description) {
-    return res.status(400).json({
-      error: "Title and description are required",
+app.post("/blogs", verifyToken, upload.single("image"), async (req, res) => {
+  try {
+    if (!req.body.title || !req.body.description) {
+      return res.status(400).json({
+        error: "Title and description are required",
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        error: "Blog image is required",
+      });
+    }
+
+    const existingBlog = await Blog.findOne({
+      title: req.body.title.trim(),
+    });
+
+    if (existingBlog) {
+      return res.status(409).json({
+        error: "Blog already exists",
+      });
+    }
+
+    const cloudinaryResult = await uploadToCloudinary(req.file);
+
+    const blog = new Blog({
+      id: Date.now(),
+      title: req.body.title.trim(),
+      description: req.body.description.trim(),
+      image: cloudinaryResult.secure_url,
+      userEmail: req.user.email,
+    });
+
+    await blog.save();
+
+    res.status(201).json(blog);
+  } catch (error) {
+    console.log("Blog Save Error:", error);
+
+    res.status(500).json({
+      error: "Failed to save blog",
     });
   }
-
-  if (!req.file) {
-    return res.status(400).json({
-      error: "Blog image is required",
-    });
-  }
-
-  const existingBlog = blogs.find((item) => {
-    return item.title.toLowerCase() === req.body.title.trim().toLowerCase();
-  });
-
-  if (existingBlog) {
-    return res.status(409).json({
-      error: "Blog already exists",
-    });
-  }
-
-  const blog = {
-    id: Date.now(),
-    title: req.body.title.trim(),
-    description: req.body.description.trim(),
-    image: req.file.filename,
-    userEmail: req.user.email,
-  };
-
-  blogs.push(blog);
-
-  res.status(201).json(blog);
 });
 
-app.get("/public/blogs", (req, res) => {
-  res.send(blogs);
-});
+// ==================== GET PUBLIC BLOGS ====================
 
+app.get("/public/blogs", async (req, res) => {
+  try {
+    const blogs = await Blog.find();
+
+    res.send(blogs);
+  } catch (error) {
+    console.log("Get Public Blogs Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get public blogs",
+    });
+  }
+});
 
 // ==================== CREATE FAQ ====================
 
-app.post("/faqs", verifyToken, (req, res) => {
-  if (!req.body.question || !req.body.answer) {
-    return res.status(400).json({
-      error: "Question and answer are required",
+app.post("/faqs", verifyToken, async (req, res) => {
+  try {
+    if (!req.body.question || !req.body.answer) {
+      return res.status(400).json({
+        error: "Question and answer are required",
+      });
+    }
+
+    const existingFaq = await Faq.findOne({
+      question: req.body.question.trim(),
+    });
+
+    if (existingFaq) {
+      return res.status(409).json({
+        error: "FAQ already exists",
+      });
+    }
+
+    const faq = new Faq({
+      id: Date.now(),
+      question: req.body.question.trim(),
+      answer: req.body.answer.trim(),
+      userEmail: req.user.email,
+    });
+
+    await faq.save();
+
+    res.status(201).json(faq);
+  } catch (error) {
+    console.log("FAQ Save Error:", error);
+
+    res.status(500).json({
+      error: "Failed to save FAQ",
     });
   }
-
-  const existingFaq = faqs.find((item) => {
-    return (
-      item.question.toLowerCase() === req.body.question.trim().toLowerCase()
-    );
-  });
-
-  if (existingFaq) {
-    return res.status(409).json({
-      error: "FAQ already exists",
-    });
-  }
-
-  const faq = {
-    id: Date.now(),
-    question: req.body.question.trim(),
-    answer: req.body.answer.trim(),
-    userEmail: req.user.email,
-  };
-
-  faqs.push(faq);
-
-  res.status(201).json(faq);
 });
 
 // ==================== GET PUBLIC FAQS ====================
 
-app.get("/public/faqs", (req, res) => {
-  res.send(faqs);
+app.get("/public/faqs", async (req, res) => {
+  try {
+    const faqs = await Faq.find();
+
+    res.send(faqs);
+  } catch (error) {
+    console.log("Get Public FAQs Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get public FAQs",
+    });
+  }
 });
+
 // ==================== SERVER ====================
 
 app.listen(port, () => {
+  mongoose
+    .connect(process.env.MONGO_URL)
+    .then(() => {
+      console.log("MongoDB Connected Successfully");
+    })
+    .catch((error) => {
+      console.log("MongoDB Connection Error:", error);
+    });
+
   console.log(`Example app http://localhost:${port}`);
 });
