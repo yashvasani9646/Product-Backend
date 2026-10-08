@@ -2,7 +2,6 @@ require("dotenv").config();
 const mongoose = require("mongoose");
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const cors = require("cors");
 const cloudinary = require("cloudinary").v2;
 const app = express();
 const port = process.env.PORT || 3000;
@@ -20,21 +19,9 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-app.use(
-  cors({
-    origin: [
-      "https://yash-single-product.vercel.app",
-      "https://products-gamma-pink.vercel.app",
-      "https://products-rshc.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "https://products-tjyy.vercel.app",
-      "https://upleex-app-8nk4.vercel.app",
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+const cors = require("cors");
+
+app.use(cors());
 const multer = require("multer");
 
 app.use(express.json());
