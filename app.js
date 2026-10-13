@@ -10,6 +10,7 @@ const Category = require("./model/Category");
 const Product = require("./model/Product");
 const Blog = require("./model/Blog");
 const Faq = require("./model/Faq");
+const Review = require("./model/Review");
 
 console.log("Cloudinary Cloud Name:", process.env.CLOUDINARY_CLOUD_NAME);
 
@@ -88,7 +89,8 @@ app.post("/products", verifyToken, upload.single("image"), async (req, res) => {
       !req.body.price ||
       !req.body.category ||
       !req.body.subcategory ||
-      !req.body.type
+      !req.body.type ||
+      !req.body.description
     ) {
       return res.status(400).json({
         error: "Please all fields are required",
@@ -154,6 +156,15 @@ app.post("/products", verifyToken, upload.single("image"), async (req, res) => {
       category: req.body.category,
       subcategory: req.body.subcategory,
       type: req.body.type,
+      description: req.body.description.trim(),
+
+      // Product Details
+      designMotif: req.body.designMotif || "",
+      centerpieceStone: req.body.centerpieceStone || "",
+      earringStyle: req.body.earringStyle || "",
+      embellishments: req.body.embellishments || "",
+      finish: req.body.finish || "",
+
       available: available,
       image: cloudinaryResult.secure_url,
       userEmail: req.user.email,
@@ -231,7 +242,8 @@ app.put(
         !req.body.price ||
         !req.body.category ||
         !req.body.subcategory ||
-        !req.body.type
+        !req.body.type ||
+        !req.body.description
       ) {
         return res.status(400).json({
           error: "Please all fields are required",
@@ -275,6 +287,15 @@ app.put(
       product.category = req.body.category;
       product.subcategory = req.body.subcategory;
       product.type = req.body.type;
+      product.description = req.body.description.trim();
+
+      // Product Details
+      product.designMotif = req.body.designMotif || "";
+      product.centerpieceStone = req.body.centerpieceStone || "";
+      product.earringStyle = req.body.earringStyle || "";
+      product.embellishments = req.body.embellishments || "";
+      product.finish = req.body.finish || "";
+
       product.available = req.body.available === "true";
 
       if (req.file) {
@@ -769,6 +790,141 @@ app.get("/public/faqs", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to get public FAQs",
+    });
+  }
+});
+// ==================== CREATE PRODUCT REVIEW ====================
+
+app.post("/public/products/:productId/reviews", async (req, res) => {
+  try {
+    const { userName, rating, comment } = req.body;
+    const productId = req.params.productId;
+
+    if (!userName || !userName.trim()) {
+      return res.status(400).json({
+        error: "User name is required",
+      });
+    }
+
+    if (
+      rating === undefined ||
+      rating === null ||
+      rating === "" ||
+      !Number.isInteger(Number(rating)) ||
+      Number(rating) < 1 ||
+      Number(rating) > 5
+    ) {
+      return res.status(400).json({
+        error: "Rating must be between 1 and 5",
+      });
+    }
+
+    if (!comment || !comment.trim()) {
+      return res.status(400).json({
+        error: "Review comment is required",
+      });
+    }
+
+    const product = await Product.findOne({
+      $or: [
+        { id: productId },
+        ...(Number.isFinite(Number(productId))
+          ? [{ id: Number(productId) }]
+          : []),
+        ...(mongoose.Types.ObjectId.isValid(productId)
+          ? [{ _id: productId }]
+          : []),
+      ],
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        error: "Product not found",
+      });
+    }
+
+    const review = new Review({
+      productId: String(product.id),
+      userName: userName.trim(),
+      rating: Number(rating),
+      comment: comment.trim(),
+    });
+
+    await review.save();
+
+    res.status(201).json({
+      message: "Review submitted successfully",
+      review,
+    });
+  } catch (error) {
+    console.log("Create Review Error:", error);
+
+    res.status(500).json({
+      error: "Failed to submit review",
+    });
+  }
+});
+
+
+// ==================== GET PRODUCT REVIEWS ====================
+
+app.get("/public/products/:productId/reviews", async (req, res) => {
+  try {
+    const productId = req.params.productId;
+
+    const product = await Product.findOne({
+      $or: [
+        { id: productId },
+        ...(Number.isFinite(Number(productId))
+          ? [{ id: Number(productId) }]
+          : []),
+        ...(mongoose.Types.ObjectId.isValid(productId)
+          ? [{ _id: productId }]
+          : []),
+      ],
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        error: "Product not found",
+      });
+    }
+
+    const reviews = await Review.find({
+      productId: String(product.id),
+    }).sort({ createdAt: -1 });
+
+    const totalReviews = reviews.length;
+
+    const averageRating =
+      totalReviews > 0
+        ? Number(
+            (
+              reviews.reduce((total, review) => total + review.rating, 0) /
+              totalReviews
+            ).toFixed(1),
+          )
+        : 0;
+
+    const ratingBreakdown = {
+      5: reviews.filter((review) => review.rating === 5).length,
+      4: reviews.filter((review) => review.rating === 4).length,
+      3: reviews.filter((review) => review.rating === 3).length,
+      2: reviews.filter((review) => review.rating === 2).length,
+      1: reviews.filter((review) => review.rating === 1).length,
+    };
+
+    res.json({
+      reviews,
+      totalReviews,
+      averageRating,
+      ratingBreakdown,
+    });
+  } catch (error) {
+    console.log("Get Reviews Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get reviews",
     });
   }
 });

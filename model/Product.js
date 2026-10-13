@@ -38,6 +38,43 @@ const ProductSchema = new mongoose.Schema(
       trim: true,
     },
 
+    description: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // Product Details fields
+    designMotif: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    centerpieceStone: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    earringStyle: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    embellishments: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    finish: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     available: {
       type: Boolean,
       default: true,
