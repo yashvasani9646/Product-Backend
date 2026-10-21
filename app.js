@@ -11,7 +11,7 @@ const Product = require("./model/Product");
 const Blog = require("./model/Blog");
 const Faq = require("./model/Faq");
 const Review = require("./model/Review");
-
+const User = require("./model/User");
 console.log("Cloudinary Cloud Name:", process.env.CLOUDINARY_CLOUD_NAME);
 
 cloudinary.config({
@@ -28,7 +28,6 @@ const multer = require("multer");
 app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
-const users = [];
 
 const verifyToken = (req, res, next) => {
   const token = req.headers.authorization;
@@ -48,6 +47,17 @@ const verifyToken = (req, res, next) => {
       error: "Invalid or expired token",
     });
   }
+};
+
+// Resolve the authenticated user from the verified token.
+// Prefer the immutable MongoDB _id (new tokens) and fall back to email so that
+// tokens issued before this change keep working. Never trust client input.
+const findAuthenticatedUser = (req) => {
+  const query = req.user?.id
+    ? { _id: req.user.id }
+    : { email: req.user?.email };
+
+  return User.findOne(query);
 };
 
 const storage = multer.memoryStorage();
@@ -529,60 +539,115 @@ app.delete("/categories/:id", verifyToken, async (req, res) => {
 
 // ==================== CHECK EMAIL ====================
 
-app.get("/check-email", (req, res) => {
-  const email = req.query.email;
+// ==================== CHECK EMAIL ====================
 
-  const exists = users.some((user) => user.email === email);
+app.get("/check-email", async (req, res) => {
+  try {
+    const email = req.query.email;
 
-  res.json({
-    exists: exists,
-  });
+    if (!email) {
+      return res.status(400).json({
+        error: "Email is required",
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.trim().toLowerCase(),
+    });
+
+    res.json({
+      exists: !!user,
+    });
+  } catch (error) {
+    console.log("Check Email Error:", error);
+
+    res.status(500).json({
+      error: "Failed to check email",
+    });
+  }
 });
+// ==================== REGISTER ====================
 
 // ==================== REGISTER ====================
 
-app.post("/register", (req, res) => {
-  console.log(req.body);
+app.post("/register", async (req, res) => {
+  try {
+    const name = req.body.name?.trim();
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password;
+    const phoneNumber = String(req.body.phoneNumber || "").trim();
 
-  const errors = {};
+    const errors = {};
 
-  if (!req.body.name) {
-    errors.name = "Name is required";
-  }
+    if (!name) {
+      errors.name = "Name is required";
+    }
 
-  if (!req.body.email) {
-    errors.email = "Email is required";
-  } else if (!req.body.email.includes("@")) {
-    errors.email = "Invalid Email";
-  } else if (users.some((user) => user.email === req.body.email)) {
-    errors.email = "Email Already Exist";
-  }
+    if (!email) {
+      errors.email = "Email is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.email = "Invalid Email";
+    }
 
-  if (!req.body.password) {
-    errors.password = "Password is required";
-  } else if (req.body.password.length < 8) {
-    errors.password = "Invalid Password Formate";
-  }
+    if (!password) {
+      errors.password = "Password is required";
+    } else if (password.length < 8) {
+      errors.password = "Invalid Password Formate";
+    }
 
-  if (!req.body.phoneNumber) {
-    errors.phoneNumber = "Phone Number is required";
-  } else if (req.body.phoneNumber.length !== 10) {
-    errors.phoneNumber = "Please Fill Correct Phone Number";
-  }
+    if (!phoneNumber) {
+      errors.phoneNumber = "Phone Number is required";
+    } else if (!/^\d{10}$/.test(phoneNumber)) {
+      errors.phoneNumber = "Please Fill Correct Phone Number";
+    }
 
-  if (Object.keys(errors).length > 0) {
-    return res.status(400).json({
-      errors: errors,
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({ errors });
+    }
+
+    const existingUser = await User.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({
+        errors: {
+          email: "Email Already Exist",
+        },
+      });
+    }
+
+    const user = new User({
+      name,
+      email,
+      password,
+      phoneNumber,
+    });
+
+    await user.save();
+
+    res.status(201).json({
+      message: "All details received",
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+      },
+    });
+  } catch (error) {
+    console.log("Register Error:", error);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        errors: {
+          email: "Email Already Exist",
+        },
+      });
+    }
+
+    res.status(500).json({
+      message: "Registration failed",
     });
   }
-
-  users.push(req.body);
-
-  console.log(users);
-
-  res.status(200).json({
-    message: "All details received",
-  });
 });
 
 // ==================== CREATE SUBCATEGORY ====================
@@ -636,43 +701,115 @@ app.post("/categories/:id/subcategories", verifyToken, async (req, res) => {
 
 // ==================== LOGIN ====================
 
-app.post("/login", (req, res) => {
-  const errors = {};
+// ==================== LOGIN ====================
+// ==================== ADMIN: GET REGISTERED USERS ====================
 
-  const user = users.find((user) => user.email === req.body.email);
+app.get("/admin/users", verifyToken, async (req, res) => {
+  try {
+    // Admin email .env se milega
+    const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 
-  if (!req.body.email) {
-    errors.email = "Email is required";
-  } else if (!users.some((user) => user.email === req.body.email)) {
-    errors.email = "Email does not exist";
-  }
+    // Logged-in user ka email
+    const loggedInEmail = req.user?.email?.trim().toLowerCase();
 
-  if (!req.body.password) {
-    errors.password = "Password is required";
-  } else {
-    if (user && user.password !== req.body.password) {
-      errors.password = "Invalid Password";
+    // Admin email configure nahi hai
+    if (!adminEmail) {
+      return res.status(500).json({
+        error: "ADMIN_EMAIL is not configured in the backend .env file.",
+      });
     }
-  }
 
-  if (Object.keys(errors).length > 0) {
-    return res.status(400).json({
-      errors: errors,
+    // Sirf authorized admin ko access milega
+    if (!loggedInEmail || loggedInEmail !== adminEmail) {
+      return res.status(403).json({
+        error: "Only the authorized admin can view registered users.",
+      });
+    }
+
+    // MongoDB se registered users fetch karo
+    // Password kabhi response mein nahi bhejna
+    const users = await User.find()
+      .select("name email phoneNumber createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      total: users.length,
+      users: users,
+    });
+  } catch (error) {
+    console.error("Get Registered Users Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch registered users.",
     });
   }
+});
 
-  const token = jwt.sign({ email: user.email }, "my-secret-key", {
-    expiresIn: "1h",
-  });
+app.post("/login", async (req, res) => {
+  try {
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password;
 
-  res.status(200).json({
-    message: "Login Successful",
-    token: token,
-    user: {
-      name: user.name,
-      email: user.email,
-    },
-  });
+    const errors = {};
+
+    if (!email) {
+      errors.email = "Email is required";
+    }
+
+    if (!password) {
+      errors.password = "Password is required";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({ errors });
+    }
+
+    const user = await User.findOne({ email }).select("+password");
+
+    if (!user) {
+      return res.status(400).json({
+        errors: {
+          email: "Email does not exist",
+        },
+      });
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        errors: {
+          password: "Invalid Password",
+        },
+      });
+    }
+
+    const token = jwt.sign(
+      { id: String(user._id), email: user.email },
+      "my-secret-key",
+      { expiresIn: "1h" }
+    );
+
+    res.status(200).json({
+      message: "Login Successful",
+      token,
+      user: {
+        id: String(user._id),
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+      },
+    });
+  } catch (error) {
+    console.log("Login Error:", error);
+
+    res.status(500).json({
+      message: "Login failed",
+    });
+  }
 });
 
 // ==================== CREATE BLOG ====================
@@ -925,6 +1062,131 @@ app.get("/public/products/:productId/reviews", async (req, res) => {
 
     res.status(500).json({
       error: "Failed to get reviews",
+    });
+  }
+});
+
+// ==================== GET PROFILE ====================
+
+app.get("/profile", verifyToken, async (req, res) => {
+  try {
+    const user = await findAuthenticatedUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        error: "Session is no longer valid. Please log in again.",
+      });
+    }
+
+    res.status(200).json({
+      user: {
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (error) {
+    console.log("Get Profile Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get profile",
+    });
+  }
+});
+
+// ==================== UPDATE PROFILE ====================
+
+app.put("/profile", verifyToken, async (req, res) => {
+  try {
+    const user = await findAuthenticatedUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        error: "Session is no longer valid. Please log in again.",
+      });
+    }
+
+    const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
+    const email =
+      typeof req.body.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "";
+    const phoneNumber = String(req.body.phoneNumber || "").trim();
+
+    const errors = {};
+
+    if (!name) {
+      errors.name = "Name is required";
+    }
+
+    if (!email) {
+      errors.email = "Email is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.email = "Invalid Email";
+    }
+
+    if (!phoneNumber) {
+      errors.phoneNumber = "Phone Number is required";
+    } else if (!/^\d{10}$/.test(phoneNumber)) {
+      errors.phoneNumber = "Please Fill Correct Phone Number";
+    }
+
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({ errors });
+    }
+
+    const duplicateEmail = await User.findOne({
+      email: email,
+      _id: { $ne: user._id },
+    });
+
+    if (duplicateEmail) {
+      return res.status(409).json({
+        errors: {
+          email: "Email Already Exist",
+        },
+      });
+    }
+
+    user.name = name;
+    user.email = email;
+    user.phoneNumber = phoneNumber;
+
+    await user.save();
+
+    res.status(200).json({
+      message: "Profile updated successfully",
+      user: {
+        name: user.name,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (error) {
+    console.log("Update Profile Error:", error);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        errors: {
+          email: "Email Already Exist",
+        },
+      });
+    }
+
+    if (error.name === "ValidationError") {
+      const errors = {};
+
+      Object.keys(error.errors).forEach((field) => {
+        errors[field] = error.errors[field].message;
+      });
+
+      return res.status(400).json({ errors });
+    }
+
+    res.status(500).json({
+      error: "Failed to update profile",
     });
   }
 });
