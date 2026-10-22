@@ -752,6 +752,36 @@ app.get("/check-email", async (req, res) => {
 
 // ==================== REGISTER ====================
 
+// Message that is returned whenever a mobile number is already taken.
+const DUPLICATE_PHONE_MESSAGE =
+  "This mobile number is already registered. Please use another number.";
+
+// A duplicate key error does not say which unique index was violated, the
+// key pattern (or the index name inside the message) tells us.
+const duplicateKeyField = (error) => {
+  const keyPattern = error?.keyPattern || {};
+
+  if (keyPattern.phoneNumber || keyPattern.phoneKey) {
+    return "phoneNumber";
+  }
+
+  if (keyPattern.email) {
+    return "email";
+  }
+
+  const message = String(error?.message || "");
+
+  if (message.includes("phoneNumber_unique_enforced")) {
+    return "phoneNumber";
+  }
+
+  if (message.includes("email_1")) {
+    return "email";
+  }
+
+  return null;
+};
+
 app.post("/register", async (req, res) => {
   try {
     const name = req.body.name?.trim();
@@ -797,6 +827,20 @@ app.post("/register", async (req, res) => {
       });
     }
 
+    // A mobile number can only be used once. The check covers every user
+    // that already exists, also the ones that were created before the
+    // unique index was added.
+    const existingPhoneUser = await User.findOne({ phoneNumber });
+
+    if (existingPhoneUser) {
+      return res.status(409).json({
+        message: DUPLICATE_PHONE_MESSAGE,
+        errors: {
+          phoneNumber: DUPLICATE_PHONE_MESSAGE,
+        },
+      });
+    }
+
     const user = new User({
       name,
       email,
@@ -819,6 +863,17 @@ app.post("/register", async (req, res) => {
     console.log("Register Error:", error);
 
     if (error.code === 11000) {
+      // Two requests can pass the check above at the same time, the unique
+      // index in the database stops the second one.
+      if (duplicateKeyField(error) === "phoneNumber") {
+        return res.status(409).json({
+          message: DUPLICATE_PHONE_MESSAGE,
+          errors: {
+            phoneNumber: DUPLICATE_PHONE_MESSAGE,
+          },
+        });
+      }
+
       return res.status(409).json({
         errors: {
           email: "Email Already Exist",
@@ -1753,6 +1808,15 @@ app.put("/profile", verifyToken, async (req, res) => {
     console.log("Update Profile Error:", error);
 
     if (error.code === 11000) {
+      if (duplicateKeyField(error) === "phoneNumber") {
+        return res.status(409).json({
+          message: DUPLICATE_PHONE_MESSAGE,
+          errors: {
+            phoneNumber: DUPLICATE_PHONE_MESSAGE,
+          },
+        });
+      }
+
       return res.status(409).json({
         errors: {
           email: "Email Already Exist",
@@ -1803,15 +1867,39 @@ app.use((error, req, res, next) => {
 
 // ==================== SERVER ====================
 
-app.listen(port, () => {
-  mongoose
-    .connect(process.env.MONGO_URL)
-    .then(() => {
-      console.log("MongoDB Connected Successfully");
-    })
-    .catch((error) => {
-      console.log("MongoDB Connection Error:", error);
-    });
+// The unique indexes of the user collection are created on startup so that
+// the database itself rejects a duplicate mobile number and not only the
+// application code.
+const ensureUserIndexes = async () => {
+  try {
+    await User.createIndexes();
 
-  console.log(`Example app http://localhost:${port}`);
-});
+    console.log("User indexes are up to date");
+  } catch (error) {
+    console.error("User Index Error:", error.message);
+  }
+};
+
+const startServer = () => {
+  app.listen(port, async () => {
+    try {
+      await mongoose.connect(process.env.MONGO_URL);
+
+      console.log("MongoDB Connected Successfully");
+
+      await ensureUserIndexes();
+    } catch (error) {
+      console.log("MongoDB Connection Error:", error);
+    }
+
+    console.log(`Example app http://localhost:${port}`);
+  });
+};
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = app;
+module.exports.ensureUserIndexes = ensureUserIndexes;
+module.exports.startServer = startServer;
