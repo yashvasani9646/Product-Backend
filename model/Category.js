@@ -14,8 +14,13 @@ const categorySchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Subcategories were originally stored as an array of plain strings.
+    // They are now stored as objects ({ id, subcategory, image, available })
+    // so that a subcategory can have its own image, status and identity.
+    // The array is kept as Mixed so that legacy string entries keep loading
+    // and saving without any data migration or data loss.
     subcategories: {
-      type: [String],
+      type: [mongoose.Schema.Types.Mixed],
       default: [],
     },
 

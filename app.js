@@ -62,7 +62,26 @@ const findAuthenticatedUser = (req) => {
 
 const storage = multer.memoryStorage();
 
-const upload = multer({ storage: storage });
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: MAX_IMAGE_SIZE,
+  },
+  fileFilter: (req, file, cb) => {
+    // Only real images are accepted, anything else is rejected before it
+    // reaches Cloudinary.
+    if (!file.mimetype || !file.mimetype.startsWith("image/")) {
+      const error = new Error("Only image files are allowed");
+      error.status = 400;
+
+      return cb(error);
+    }
+
+    cb(null, true);
+  },
+});
 
 const uploadToCloudinary = (file) => {
   return new Promise((resolve, reject) => {
@@ -81,6 +100,167 @@ const uploadToCloudinary = (file) => {
 
     stream.end(file.buffer);
   });
+};
+
+// Upload an optional image and return its secure url. A broken or invalid
+// file is reported as a 400 instead of an internal server error.
+const uploadImage = async (file) => {
+  if (!file) {
+    return "";
+  }
+
+  try {
+    const cloudinaryResult = await uploadToCloudinary(file);
+
+    return cloudinaryResult.secure_url;
+  } catch (error) {
+    const uploadError = new Error("Invalid image file");
+    uploadError.status = 400;
+    uploadError.cause = error;
+
+    throw uploadError;
+  }
+};
+
+// ==================== SUBCATEGORY HELPERS ====================
+// Subcategories used to live on a category as a plain array of strings.
+// They are now stored as objects ({ id, subcategory, image, available }) so a
+// subcategory can own an image, an availability flag and a stable id.
+// The helpers below read and write both shapes so that legacy records keep
+// working and no existing data is dropped.
+
+const getSubcategoryName = (entry) => {
+  if (typeof entry === "string") {
+    return entry;
+  }
+
+  return entry?.subcategory;
+};
+
+const getSubcategoryNames = (category) => {
+  return (category?.subcategories || [])
+    .map((entry) => getSubcategoryName(entry))
+    .filter(Boolean);
+};
+
+// Shape a stored entry for the API. Legacy string entries get a temporary
+// id based on their position until they are rewritten by a write operation.
+const normalizeSubcategory = (entry, categoryId, index) => {
+  if (entry && typeof entry === "object") {
+    return {
+      id: entry.id ?? `legacy-${categoryId}-${index}`,
+      subcategory: entry.subcategory,
+      image: entry.image || "",
+      available: entry.available !== false,
+      createdAt: entry.createdAt || null,
+      updatedAt: entry.updatedAt || null,
+    };
+  }
+
+  return {
+    id: `legacy-${categoryId}-${index}`,
+    subcategory: entry,
+    image: "",
+    available: true,
+    createdAt: null,
+    updatedAt: null,
+  };
+};
+
+// Convert every legacy string entry into a full subcategory object so it
+// owns an image, a status and an id. The id of a legacy entry is the same
+// temporary id the API already reports, so it stays valid after the write.
+// Called before saving a category.
+const migrateSubcategories = (category) => {
+  category.subcategories = (category.subcategories || []).map((entry, index) => {
+    if (entry && typeof entry === "object") {
+      return {
+        ...entry,
+        id: entry.id ?? `legacy-${category.id}-${index}`,
+        subcategory: entry.subcategory,
+        image: entry.image || "",
+        available: entry.available !== false,
+      };
+    }
+
+    return {
+      id: `legacy-${category.id}-${index}`,
+      subcategory: entry,
+      image: "",
+      available: true,
+    };
+  });
+};
+
+// Position of a subcategory inside its category. Legacy entries are addressed
+// by their temporary id, so the lookup works for both stored shapes.
+const findSubcategoryIndex = (category, subId) => {
+  return (category.subcategories || []).findIndex((entry, entryIndex) => {
+    const normalized = normalizeSubcategory(entry, category.id, entryIndex);
+
+    return String(normalized.id) === String(subId);
+  });
+};
+
+// Unique id for a new subcategory, ids follow the same pattern as the
+// category and product ids used across the project.
+const nextSubcategoryId = (category) => {
+  const ids = (category.subcategories || [])
+    .map((entry) => Number(entry?.id))
+    .filter((value) => Number.isFinite(value));
+
+  const max = ids.length > 0 ? Math.max(...ids) : 0;
+
+  return Math.max(max + 1, Date.now());
+};
+
+// Category payload for the admin panel, subcategories as objects.
+const serializeCategory = (category) => {
+  return {
+    ...category.toObject(),
+    subcategories: (category.subcategories || []).map((entry, index) =>
+      normalizeSubcategory(entry, category.id, index),
+    ),
+  };
+};
+
+// Category payload for the public site, subcategories stay plain strings.
+const serializePublicCategory = (category) => {
+  return {
+    ...category.toObject(),
+    subcategories: getSubcategoryNames(category),
+  };
+};
+
+// Subcategory payload for the admin panel. The parent category is attached
+// so the subcategory can be rendered in its own table.
+const serializeSubcategory = (entry, category, index) => {
+  const normalized = normalizeSubcategory(entry, category.id, index);
+
+  return {
+    ...normalized,
+    categoryId: category.id,
+    category: category.category,
+    categoryMongoId: String(category._id),
+    categoryImage: category.image || "",
+    categoryAvailable: category.available !== false,
+    categoryCreatedAt: category.createdAt || null,
+    categoryUpdatedAt: category.updatedAt || null,
+  };
+};
+
+// Subcategory payload for the public site, only the public fields are sent.
+const serializePublicSubcategory = (entry, category, index) => {
+  const normalized = normalizeSubcategory(entry, category.id, index);
+
+  return {
+    id: normalized.id,
+    subcategory: normalized.subcategory,
+    image: normalized.image,
+    available: normalized.available,
+    categoryId: category.id,
+    category: category.category,
+  };
 };
 
 let products = [];
@@ -127,9 +307,9 @@ app.post("/products", verifyToken, upload.single("image"), async (req, res) => {
       });
     }
 
-    const existingSubcategory = existingCategory.subcategories.find(
-      (item) => item === req.body.subcategory,
-    );
+      const existingSubcategory = getSubcategoryNames(existingCategory).includes(
+        req.body.subcategory,
+      );
 
     if (!existingSubcategory) {
       return res.status(400).json({
@@ -270,8 +450,8 @@ app.put(
         });
       }
 
-      const existingSubcategory = existingCategory.subcategories.find(
-        (item) => item === req.body.subcategory,
+      const existingSubcategory = getSubcategoryNames(existingCategory).includes(
+        req.body.subcategory,
       );
 
       if (!existingSubcategory) {
@@ -420,7 +600,7 @@ app.get("/categories", verifyToken, async (req, res) => {
       userEmail: req.user.email,
     });
 
-    res.send(userCategories);
+    res.send(userCategories.map((category) => serializeCategory(category)));
   } catch (error) {
     console.log("Get Categories Error:", error);
 
@@ -436,7 +616,9 @@ app.get("/public/categories", async (req, res) => {
   try {
     const categories = await Category.find();
 
-    res.send(categories);
+    res.send(
+      categories.map((category) => serializePublicCategory(category)),
+    );
   } catch (error) {
     console.log("Get Public Categories Error:", error);
 
@@ -650,9 +832,400 @@ app.post("/register", async (req, res) => {
   }
 });
 
+// ==================== LIST SUBCATEGORIES (ADMIN) ====================
+// The admin panel shows the subcategories in their own table, so every
+// subcategory of the logged in user is returned as a flat list with the
+// parent category attached to it.
+
+app.get("/subcategories", verifyToken, async (req, res) => {
+  try {
+    const query = { userEmail: req.user.email };
+
+    if (req.query.categoryId !== undefined && req.query.categoryId !== "") {
+      const categoryId = Number(req.query.categoryId);
+
+      if (!Number.isFinite(categoryId)) {
+        return res.status(400).json({
+          error: "Invalid category id",
+        });
+      }
+
+      query.id = categoryId;
+    }
+
+    if (
+      req.query.available !== undefined &&
+      req.query.available !== "" &&
+      req.query.available !== "true" &&
+      req.query.available !== "false"
+    ) {
+      return res.status(400).json({
+        error: "Invalid available value",
+      });
+    }
+
+    const categories = await Category.find(query);
+
+    let subcategories = categories.flatMap((category) =>
+      (category.subcategories || []).map((entry, index) =>
+        serializeSubcategory(entry, category, index),
+      ),
+    );
+
+    if (req.query.available !== undefined && req.query.available !== "") {
+      const available = req.query.available === "true";
+
+      subcategories = subcategories.filter((item) => item.available === available);
+    }
+
+    if (req.query.search && req.query.search.trim()) {
+      const search = req.query.search.trim().toLowerCase();
+
+      subcategories = subcategories.filter(
+        (item) =>
+          (item.subcategory || "").toLowerCase().includes(search) ||
+          (item.category || "").toLowerCase().includes(search),
+      );
+    }
+
+    res.send(subcategories);
+  } catch (error) {
+    console.log("Get Subcategories Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get subcategories",
+    });
+  }
+});
+
+// ==================== GET SINGLE SUBCATEGORY (ADMIN) ====================
+
+app.get("/subcategories/:subId", verifyToken, async (req, res) => {
+  try {
+    const categories = await Category.find({ userEmail: req.user.email });
+
+    for (const category of categories) {
+      const index = findSubcategoryIndex(category, req.params.subId);
+
+      if (index !== -1) {
+        return res.send(
+          serializeSubcategory(category.subcategories[index], category, index),
+        );
+      }
+    }
+
+    res.status(404).json({
+      error: "Subcategory not found",
+    });
+  } catch (error) {
+    console.log("Get Subcategory Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get subcategory",
+    });
+  }
+});
+
+// ==================== GET CATEGORY SUBCATEGORIES (ADMIN) ====================
+
+app.get("/categories/:id/subcategories", verifyToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({
+        error: "Invalid category id",
+      });
+    }
+
+    const category = await Category.findOne({
+      id: id,
+      userEmail: req.user.email,
+    });
+
+    if (!category) {
+      return res.status(404).json({
+        error: "Category not found",
+      });
+    }
+
+    res.send(
+      (category.subcategories || []).map((entry, index) =>
+        serializeSubcategory(entry, category, index),
+      ),
+    );
+  } catch (error) {
+    console.log("Get Category Subcategories Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get subcategories",
+    });
+  }
+});
+
+// ==================== GET SINGLE CATEGORY SUBCATEGORY (ADMIN) ====================
+
+app.get(
+  "/categories/:id/subcategories/:subId",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "Invalid category id",
+        });
+      }
+
+      const category = await Category.findOne({
+        id: id,
+        userEmail: req.user.email,
+      });
+
+      if (!category) {
+        return res.status(404).json({
+          error: "Category not found",
+        });
+      }
+
+      const index = findSubcategoryIndex(category, req.params.subId);
+
+      if (index === -1) {
+        return res.status(404).json({
+          error: "Subcategory not found",
+        });
+      }
+
+      res.send(serializeSubcategory(category.subcategories[index], category, index));
+    } catch (error) {
+      console.log("Get Category Subcategory Error:", error);
+
+      res.status(500).json({
+        error: "Failed to get subcategory",
+      });
+    }
+  },
+);
+
+// ==================== GET PUBLIC CATEGORY SUBCATEGORIES ====================
+// Read only endpoint for the customer website, it returns the subcategories
+// of a category including their own image.
+
+app.get("/public/categories/:id/subcategories", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({
+        error: "Invalid category id",
+      });
+    }
+
+    const category = await Category.findOne({ id: id });
+
+    if (!category) {
+      return res.status(404).json({
+        error: "Category not found",
+      });
+    }
+
+    res.send(
+      (category.subcategories || []).map((entry, index) =>
+        serializePublicSubcategory(entry, category, index),
+      ),
+    );
+  } catch (error) {
+    console.log("Get Public Subcategories Error:", error);
+
+    res.status(500).json({
+      error: "Failed to get subcategories",
+    });
+  }
+});
+
 // ==================== CREATE SUBCATEGORY ====================
 
-app.post("/categories/:id/subcategories", verifyToken, async (req, res) => {
+app.post(
+  "/categories/:id/subcategories",
+  verifyToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      const category = await Category.findOne({
+        id: id,
+        userEmail: req.user.email,
+      });
+
+      if (!category) {
+        return res.status(403).json({
+          error: "You cannot update this category",
+        });
+      }
+
+      if (!req.body?.subcategory || !req.body.subcategory.trim()) {
+        return res.status(400).json({
+          error: "Subcategory name is required",
+        });
+      }
+
+      const subcategory = req.body.subcategory.trim();
+
+      const existingSubcategory = getSubcategoryNames(category).some(
+        (item) => item.toLowerCase() === subcategory.toLowerCase(),
+      );
+
+      if (existingSubcategory) {
+        return res.status(409).json({
+          error: "Subcategory already exists",
+        });
+      }
+
+      let image = "";
+
+      try {
+        image = await uploadImage(req.file);
+      } catch (error) {
+        return res.status(400).json({
+          error: error.message,
+        });
+      }
+
+      migrateSubcategories(category);
+
+      const now = new Date().toISOString();
+
+      category.subcategories.push({
+        id: nextSubcategoryId(category),
+        subcategory: subcategory,
+        image: image,
+        available: req.body?.available !== "false",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await category.save();
+
+      res.status(201).json(serializeCategory(category));
+    } catch (error) {
+      console.log("Subcategory Save Error:", error);
+
+      res.status(500).json({
+        error: "Failed to save subcategory",
+      });
+    }
+  },
+);
+
+// ==================== UPDATE SUBCATEGORY ====================
+
+app.put(
+  "/categories/:id/subcategories/:subId",
+  verifyToken,
+  upload.single("image"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      const category = await Category.findOne({
+        id: id,
+        userEmail: req.user.email,
+      });
+
+      if (!category) {
+        return res.status(403).json({
+          error: "You cannot update this category",
+        });
+      }
+
+      // Resolve the position before migrating, a legacy entry is addressed
+      // by its temporary id which only exists on the stored shape.
+      const index = findSubcategoryIndex(category, req.params.subId);
+
+      if (index === -1) {
+        return res.status(404).json({
+          error: "Subcategory not found",
+        });
+      }
+
+      migrateSubcategories(category);
+
+      const current = category.subcategories[index];
+      const previousName = current.subcategory;
+
+      let subcategory = previousName;
+
+      if (req.body?.subcategory !== undefined) {
+        if (!req.body.subcategory || !req.body.subcategory.trim()) {
+          return res.status(400).json({
+            error: "Subcategory name is required",
+          });
+        }
+
+        subcategory = req.body.subcategory.trim();
+
+        const duplicate = getSubcategoryNames(category).some(
+          (item, itemIndex) =>
+            itemIndex !== index &&
+            item.toLowerCase() === subcategory.toLowerCase(),
+        );
+
+        if (duplicate) {
+          return res.status(409).json({
+            error: "Subcategory already exists",
+          });
+        }
+      }
+
+      if (req.file) {
+        try {
+          current.image = await uploadImage(req.file);
+        } catch (error) {
+          return res.status(400).json({
+            error: error.message,
+          });
+        }
+      }
+
+      current.subcategory = subcategory;
+      current.updatedAt = new Date().toISOString();
+
+      if (req.body?.available !== undefined) {
+        current.available = req.body.available !== "false";
+      }
+
+      await category.save();
+
+      // Products keep a reference to their subcategory by name, the products
+      // are renamed as well so no product loses its subcategory.
+      if (subcategory !== previousName) {
+        await Product.updateMany(
+          {
+            category: category.category,
+            subcategory: previousName,
+          },
+          {
+            $set: { subcategory: subcategory },
+          },
+        );
+      }
+
+      res.send(serializeCategory(category));
+    } catch (error) {
+      console.log("Update Subcategory Error:", error);
+
+      res.status(500).json({
+        error: "Failed to update subcategory",
+      });
+    }
+  },
+);
+
+// ==================== DELETE SUBCATEGORY ====================
+
+app.delete("/categories/:id/subcategories/:subId", verifyToken, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -667,34 +1240,46 @@ app.post("/categories/:id/subcategories", verifyToken, async (req, res) => {
       });
     }
 
-    if (!req.body.subcategory || !req.body.subcategory.trim()) {
-      return res.status(400).json({
-        error: "Subcategory name is required",
+    const index = findSubcategoryIndex(category, req.params.subId);
+
+    if (index === -1) {
+      return res.status(404).json({
+        error: "Subcategory not found",
       });
     }
 
-    const subcategory = req.body.subcategory.trim();
+    const current = normalizeSubcategory(
+      category.subcategories[index],
+      category.id,
+      index,
+    );
 
-    const existingSubcategory = category.subcategories.find((item) => {
-      return item.toLowerCase() === subcategory.toLowerCase();
+    // A subcategory that is still used by a product is not deleted, the
+    // product would end up with a subcategory that does not exist anymore.
+    const linkedProducts = await Product.countDocuments({
+      category: category.category,
+      subcategory: current.subcategory,
     });
 
-    if (existingSubcategory) {
+    if (linkedProducts > 0) {
       return res.status(409).json({
-        error: "Subcategory already exists",
+        error: `Cannot delete "${current.subcategory}". ${linkedProducts} product(s) are using this subcategory, reassign or remove them first.`,
+        linkedProducts: linkedProducts,
       });
     }
 
-    category.subcategories.push(subcategory);
+    migrateSubcategories(category);
+
+    category.subcategories.splice(index, 1);
 
     await category.save();
 
-    res.send(category);
+    res.send(serializeCategory(category));
   } catch (error) {
-    console.log("Subcategory Save Error:", error);
+    console.log("Delete Subcategory Error:", error);
 
     res.status(500).json({
-      error: "Failed to save subcategory",
+      error: "Failed to delete subcategory",
     });
   }
 });
@@ -1189,6 +1774,31 @@ app.put("/profile", verifyToken, async (req, res) => {
       error: "Failed to update profile",
     });
   }
+});
+
+// ==================== ERROR HANDLER ====================
+// Multer rejects an invalid or oversized upload before the route handler
+// runs, so those errors are turned into a clean response here.
+
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    const message =
+      error.code === "LIMIT_FILE_SIZE"
+        ? "Image size must be 5MB or less"
+        : "Invalid image upload";
+
+    return res.status(400).json({ error: message });
+  }
+
+  if (error && error.status === 400) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  console.log("Unhandled Error:", error);
+
+  res.status(500).json({
+    error: "Something went wrong",
+  });
 });
 
 // ==================== SERVER ====================
