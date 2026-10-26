@@ -1275,6 +1275,11 @@ app.put(
         current.available = req.body.available !== "false";
       }
 
+      // The subcategories array is a Mixed path, so mutating an entry in
+      // place is not tracked by Mongoose. Mark the path explicitly or the
+      // updated values are only present in this response and never saved.
+      category.markModified("subcategories");
+
       await category.save();
 
       // Products keep a reference to their subcategory by name, the products
