@@ -214,6 +214,17 @@ const nextSubcategoryId = (category) => {
   return Math.max(max + 1, Date.now());
 };
 
+// Category names are unique regardless of case and surrounding whitespace.
+const normalizeCategoryName = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const categoryNamePattern = (name) =>
+  new RegExp(`^\\s*${escapeRegExp(name.trim())}\\s*$`, "i");
+
 // Category payload for the admin panel, subcategories as objects.
 const serializeCategory = (category) => {
   return {
@@ -546,14 +557,16 @@ app.post(
   upload.single("image"),
   async (req, res) => {
     try {
-      if (!req.body.category) {
+      if (!req.body.category || !req.body.category.trim()) {
         return res.status(400).json({
           error: "Category name is required",
         });
       }
 
+      const categoryName = req.body.category.trim();
+
       const existingCategory = await Category.findOne({
-        category: req.body.category.trim(),
+        category: categoryNamePattern(categoryName),
       });
 
       if (existingCategory) {
@@ -572,7 +585,7 @@ app.post(
 
       const category = new Category({
         id: Date.now(),
-        category: req.body.category.trim(),
+        category: categoryName,
         subcategories: [],
         available: req.body.available === "true",
         image: cloudinaryResult.secure_url,
@@ -649,24 +662,35 @@ app.put(
         });
       }
 
-      if (!req.body.category) {
+      if (!req.body.category || !req.body.category.trim()) {
         return res.status(400).json({
           error: "Category name is required",
         });
       }
 
-      const duplicate = await Category.findOne({
-        id: { $ne: id },
-        category: req.body.category.trim(),
-      });
+      const nextCategoryName = req.body.category.trim();
 
-      if (duplicate) {
-        return res.status(409).json({
-          error: "Category already exists",
+      // An unchanged name belongs to this category, so it must never be
+      // compared against the other categories (a legacy duplicate name must
+      // not block saving unrelated changes either).
+      const nameChanged =
+        normalizeCategoryName(nextCategoryName) !==
+        normalizeCategoryName(category.category);
+
+      if (nameChanged) {
+        const duplicate = await Category.findOne({
+          _id: { $ne: category._id },
+          category: categoryNamePattern(nextCategoryName),
         });
+
+        if (duplicate) {
+          return res.status(409).json({
+            error: "Category already exists",
+          });
+        }
       }
 
-      category.category = req.body.category.trim();
+      category.category = nextCategoryName;
       category.available = req.body.available === "true";
 
       if (req.file) {
